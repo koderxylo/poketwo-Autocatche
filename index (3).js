@@ -5,6 +5,8 @@ const { captchaHook } = require("../config");
 const { checkRarity, getImage, solveHint } = require("pokehint");
 const { log, formatPokemon, logHook, colors } = require("../utils/utils");
 const { getName } = require("../utils/api");
+const axios = require("axios");
+const https = require("https");
 
 const poketwo = "716390085896962058";
 const p2ass = "854233015475109888";
@@ -49,33 +51,18 @@ class AutoCatcher {
       res(`Logged in as ${this.client.user.tag}`.green);
     });
   }
+
   catcher() {
     this.client.on("messageCreate", async (message) => {
-      // disabling only p2 assistant catch, adding hint catcher
-      // if (
-      //   message.author.id === p2ass &&
-      //   message.content.includes(":") &&
-      //   message.content.includes("%")
-      // ) {
-      //   if (this.captcha || this.aiCatch || !this.catch) return;
-      //   const msgs = [`c`, `catch`];
-      //   const name = message.content.substring(0, message.content.indexOf(":"));
-      //   await message.channel.send(
-      //     `<@${poketwo}> ${msgs[Math.round(Math.random())]} ${name}`
-      //   );
-      // } 
-      if (
-        message.author.id === poketwo ||
-        message.author.id === this.client.user.id
-      ) {
-        // hint solver code start
+      // Hint solver code start
+      if (message.author.id === poketwo || message.author.id === this.client.user.id) {
         if (message.content.includes("The pokémon is")) {
           if (this.captcha) return;
           if (!this.catch) return;
           let pokemons = await solveHint(message);
           let tries = 0, index = 0;
           let msgs = ["c", "catch"];
-          let hints = [`hint`, `h`];
+          let hints = ["hint", "h"];
           const collector = message.channel.createMessageCollector({
             filter: p2Filter,
             time: 18_000,
@@ -92,19 +79,15 @@ class AutoCatcher {
                   );
                   index = -1;
                 } else {
-                  let msgs = ["c", "catch"];
                   await msg.channel.send(
-                    `<@${poketwo}> ${msgs[Math.round(Math.random())]} ${pokemons[index]
-                    }`
+                    `<@${poketwo}> ${msgs[Math.round(Math.random())]} ${pokemons[index]}`
                   );
                 }
               }
             } else if (msg.content.includes("The pokémon is")) {
               let pokemons = await solveHint(msg);
-              let msgs = ["c", "catch"];
               await msg.channel.send(
-                `<@${poketwo}> ${msgs[Math.round(Math.random())]} ${pokemons[0]
-                }`
+                `<@${poketwo}> ${msgs[Math.round(Math.random())]} ${pokemons[0]}`
               );
               tries++;
             } else if (msg.content.includes(`Congratulations`)) {
@@ -116,63 +99,45 @@ class AutoCatcher {
           );
           tries++;
         }
-        // hint solver end
+
+        // Handling Pokémon appearance via embeds
         if (message.embeds.length > 0) {
-          const embed = message.embeds[0];
-          if (embed.title.includes("has appeared")) {
-            // ai catch api is not working, adding hint/p2ass catcher.
-            // if (!this.aiCatch || this.captcha || !this.catch) return;
-            // const imageUrl = embed.image?.url;
-            // if (imageUrl) {
-            //   const [name, confidence] = await getName(imageUrl, false);
-            //   if (name) {
-            //     message.channel.send(`<@${poketwo}> c ${name}`);
-            //   } else {
-            //     await message.channel.send("Identification failed.");
-            //   }
-            // }
-            // const helperFilter = (msg) => ["854233015475109888", "874910942490677270"].includes(msg.author.id);
-            const helperFilter = (msg) => msg.author.id === p2ass;
-            let msg;
-            try {
-              msg = await (
-                await message.channel.awaitMessages({
-                  max: 1,
-                  time: 4000,
-                  filter: helperFilter,
-                  errors: ["time"],
-                })
-              ).first();
-            } catch (e) { }
-            if (!msg) {
-              let msgs = [`hint`, `h`];
-              await message.channel.send(
-                `<@${poketwo}> ${msgs[Math.round(Math.random())]}`
-              );
-              return;
-            }
-            if (msg.author.id == p2ass) {
-              if (msg.content.includes(":") && msg.content.includes("%")) {
-                let msgs = [`c`, `catch`];
-                let confidence = parseInt(msg.content.substring(msg.content.indexOf(":") + 1).replace("%", ""));
-                let x = true
-                if (!isNaN(confidence)) {
-                  if (confidence < 60) {
-                    x = false
-                    let msgs = [`hint`, `h`];
-                    await msg.channel.send(
-                      `<@${poketwo}> ${msgs[Math.round(Math.random())]}`
-                    );
-                  }
+          if (this.captcha || !this.catch) return;
+
+          let title = message.embeds[0].title;
+          if (title.includes("has appeared")) {
+            const imageUrl = message.embeds[0].image?.url; // Extract image URL from embed
+            if (!imageUrl) return;
+
+            const apiKey = "zxclan"; // Replace with your actual API key
+            const endpoint = "https://poketwo.xyz/predict";
+
+            const instance = axios.create({
+              httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            });
+
+            instance
+              .post(endpoint, { imageUrl }, { headers: { "x-api-key": apiKey, "Content-Type": "application/json" } })
+              .then((response) => {
+                const name = response.data.name;
+                if (name) {
+                  this.sender.addToQueue(`<@${poketwo}> c ${name}`, message.channel); // Send name if available
+                } else {
+                  let msgs = ["hint", "h"];
+                  this.sender.addToQueue(`<@${poketwo}> ${msgs[Math.round(Math.random())]}`, message.channel); // Send hint if no name
                 }
-                if (x)
-                  await msg.channel.send(
-                    `<@${poketwo}> ${msgs[Math.round(Math.random())]
-                    } ${msg.content.substring(0, msg.content.indexOf(":"))}`
-                  );
-              }
-            }
-          } else if (
+              })
+              .catch((error) => {
+                console.error("Error:", error.message);
+                let msgs = ["hint", "h"];
+                this.sender.addToQueue(`<@${poketwo}> ${msgs[Math.round(Math.random())]}`, message.channel); // Send hint on error
+              });
+          }
+        }
+      }
+    });
+    
+       } else if (
             embed.footer?.text.includes("Terms") &&
             message?.components[0]?.components[0]
           ) {
